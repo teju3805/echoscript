@@ -1,0 +1,127 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: #08090a;
+  color: #e4e0d8;
+  background-image:
+    radial-gradient(900px 500px at 12% -8%, rgba(255, 122, 47, 0.11), transparent 60%),
+    radial-gradient(700px 420px at 92% 4%, rgba(94, 234, 212, 0.07), transparent 62%);
+  background-attachment: fixed;
+}
+
+/* Fine film grain — keeps large dark areas from looking flat. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+::selection {
+  background: rgba(255, 122, 47, 0.3);
+  color: #f4f1ec;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #232a31;
+  border-radius: 999px;
+  border: 2px solid #08090a;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #333c45;
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-white/[0.07] bg-ink-900/70 backdrop-blur-sm;
+  }
+
+  .label {
+    @apply font-mono text-[10px] uppercase tracking-[0.18em] text-bone-600;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-5 py-2.5 text-sm font-medium transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .btn-primary {
+    @apply btn bg-ember-500 text-ink-950 hover:bg-ember-400 active:scale-[0.98];
+  }
+
+  .btn-ghost {
+    @apply btn border border-white/10 text-bone-200 hover:border-white/25 hover:bg-white/[0.04];
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 font-mono text-[11px] tracking-wide text-bone-400;
+  }
+
+  .link-underline {
+    @apply underline decoration-ember-500/40 underline-offset-4 transition-colors hover:decoration-ember-400;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, transparent, rgba(255, 122, 47, 0.16), transparent);
+  background-size: 800px 100%;
+}
+
+/* The transcript line the audio player is currently inside. */
+.line-active {
+  background: rgba(255, 122, 47, 0.09);
+  box-shadow: inset 2px 0 0 #ff7a2f;
+}
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  margin-top: -4px;
+  height: 12px;
+  width: 12px;
+  border-radius: 999px;
+  background: #ff7a2f;
+  cursor: pointer;
+}
+input[type='range']::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+input[type='range']::-moz-range-thumb {
+  height: 12px;
+  width: 12px;
+  border: none;
+  border-radius: 999px;
+  background: #ff7a2f;
+  cursor: pointer;
+}
