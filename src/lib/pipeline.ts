@@ -149,7 +149,9 @@ async function planStrategy(note: NoteRow): Promise<StepResult> {
     why = `${segments.length} chunks submitted as a single Gnani batch job`;
   } else {
     strategy = 'rest_segments';
-    why = `${note.language_code} is REST-only at Gnani — transcribing ${segments.length} chunks over REST`;
+    why = batchOk
+      ? `${segments.length} chunks over REST — under ${BATCH_THRESHOLD}, a batch job would only add queueing overhead`
+      : `${note.language_code} is REST-only at Gnani — transcribing ${segments.length} chunks over REST`;
   }
 
   await updateNote(note.id, {

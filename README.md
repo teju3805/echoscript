@@ -119,6 +119,7 @@ Two constants were corrected after the first real run, and both are worth knowin
 
 - **The REST endpoint rejects clips well short of its documented 60 s ceiling.** 45 s chunks came back as `AUDIO_TOO_LONG`, so the target chunk is 25 s and `restMaxSeconds` is 30.
 - **Three concurrent REST calls trip the free tier's rate limiter.** Requests are now serial.
+- **Google retires Gemini model ids on a schedule.** `gemini-2.5-flash` started returning 404 mid-deployment, so the adapter now asks the API which models it currently serves and picks the newest Flash it offers, caching the answer. Gemini 3.x also dropped the sampling parameters, so `temperature` is no longer sent.
 
 The first live run also exercised the resilience paths for real: a batch job returned `START_FAILED (ReadTimeout)` when Gnani could not pull the blob URLs in time, and the pipeline fell back to REST on its own — exactly as designed.
 

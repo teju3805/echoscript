@@ -36,7 +36,7 @@ export function activeProvider(): ProviderId {
 export function modelFor(p: ProviderId): string {
   switch (p) {
     case 'gemini':
-      return process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+      return process.env.GEMINI_MODEL || 'gemini-3.7-flash';
     case 'groq':
       return process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
     case 'openai':
@@ -102,23 +102,75 @@ function toStringArray(value: unknown, max: number): string[] {
     .slice(0, max);
 }
 
+/** Cached for the life of the container once we've had to look it up. */
+let geminiResolvedModel: string | null = null;
+
+async function discoverGeminiModel(key: string): Promise<string | null> {
+  try {
+    const res = await post(
+      'https://generativelanguage.googleapis.com/v1beta/models',
+      { method: 'GET', headers: { 'x-goog-api-key': key } },
+      20_000,
+    );
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as {
+      models?: { name?: string; supportedGenerationMethods?: string[] }[];
+    };
+    const usable = (data.models || [])
+      .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+      .map((m) => (m.name || '').replace(/^models\//, ''))
+      .filter((n) => n.startsWith('gemini'));
+
+    // Text-only Flash models, newest first. Skip the specialised endpoints
+    // (image, tts, live, embedding) and anything still marked preview.
+    const isSpecialised = (n: string) => /image|tts|audio|live|embedding|vision|robotics/.test(n);
+    const ranked = (pool: string[]) =>
+      [...pool].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+
+    const flash = ranked(usable.filter((n) => n.includes('flash') && !isSpecialised(n) && !n.includes('preview')));
+    if (flash.length) return flash[0];
+
+    const anyText = ranked(usable.filter((n) => !isSpecialised(n)));
+    return anyText[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function callProvider(p: ProviderId, prompt: string): Promise<string> {
   const key = keyFor(p)!;
   const model = modelFor(p);
 
   if (p === 'gemini') {
-    const res = await post(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
+    const callGemini = (m: string) =>
+      post(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: SYSTEM }] },
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.2, responseMimeType: 'application/json' },
+          // Gemini 3.x removed the sampling parameters; sending temperature
+          // here is rejected. responseMimeType is what we actually need.
+          generationConfig: { responseMimeType: 'application/json' },
         }),
-      },
-    );
+      });
+
+    let chosen = geminiResolvedModel || model;
+    let res = await callGemini(chosen);
+
+    // Google retires model ids on a schedule, which turns a working deployment
+    // into a 404 months later. Rather than hard-fail, ask the API what it
+    // currently serves and pick the newest Flash model it offers.
+    if (res.status === 404) {
+      const discovered = await discoverGeminiModel(key);
+      if (discovered && discovered !== chosen) {
+        chosen = discovered;
+        geminiResolvedModel = discovered;
+        res = await callGemini(chosen);
+      }
+    }
+
     if (!res.ok) throw new Error(`gemini ${res.status}: ${(await res.text()).slice(0, 200)}`);
     const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
     return data.candidates?.[0]?.content?.parts?.map((x) => x.text || '').join('') || '';
