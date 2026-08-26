@@ -1,9 +1,13 @@
 import { encodeWav } from './wav';
 
 export const TARGET_SAMPLE_RATE = 16_000;
-/** Gnani's REST endpoint accepts 60 s; we aim well under it to leave headroom. */
-export const TARGET_CHUNK_SEC = 45;
-export const SEARCH_WINDOW_SEC = 5;
+/**
+ * Gnani's REST endpoint rejects clips well before its documented 60 s ceiling,
+ * so we target 25 s and leave real headroom. Shorter chunks also mean finer
+ * progress reporting and a smaller loss if any single chunk fails.
+ */
+export const TARGET_CHUNK_SEC = 25;
+export const SEARCH_WINDOW_SEC = 4;
 export const MAX_CHUNKS = 100;
 
 export interface PreparedChunk {

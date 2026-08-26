@@ -86,7 +86,9 @@ export default function UploadPanel() {
         const original = await upload(`notes/${stamp}/original-${safeName}`, file, {
           access: 'public',
           handleUploadUrl: '/api/blob/upload',
-          contentType: file.type || 'application/octet-stream',
+          // MediaRecorder reports 'audio/webm;codecs=opus'; blob storage
+          // matches content types exactly, so drop the codec parameter.
+          contentType: (file.type || 'application/octet-stream').split(';')[0].trim(),
           multipart: file.size > 8 * 1024 * 1024,
           onUploadProgress: ({ percentage }) => {
             setProgress(22 + Math.round((percentage / 100) * (prepared ? 26 : 70)));
@@ -224,8 +226,8 @@ export default function UploadPanel() {
 
             <p className="font-display text-2xl text-bone-100">Drop a recording here</p>
             <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-bone-400">
-              WAV, MP3, M4A, FLAC, OGG or WebM. Anything over 45 seconds is split in your browser
-              before it is uploaded, so a two-hour lecture works the same way a voice memo does.
+              WAV, MP3, M4A, FLAC, OGG or WebM. Anything over ~25 seconds is split in your browser
+              before it is uploaded, so a long lecture works the same way a voice memo does.
             </p>
 
             <div className="mt-6 flex flex-wrap items-center justify-center gap-3">

@@ -224,7 +224,7 @@ export default async function ArchitecturePage() {
         <ol className="mt-6 space-y-4">
           {[
             ['Decode in the browser', <>The file is decoded with the Web Audio API and resampled to 16 kHz mono — the exact format Gnani normalises to internally. If the browser cannot decode it, we keep going and let Gnani&apos;s own decoder try the original file.</>],
-            ['Split on silence', <>Audio longer than ~45 s is cut into chunks. Boundaries are not fixed intervals: we compute RMS energy over 100 ms frames and pick the quietest frame within ±5 s of each target, so cuts land in pauses instead of mid-word. Cutting mid-word is the single largest accuracy loss when chunking for ASR.</>],
+            ['Split on silence', <>Audio longer than ~25 s is cut into chunks. Boundaries are not fixed intervals: we compute RMS energy over 100 ms frames and pick the quietest frame within ±4 s of each target, so cuts land in pauses instead of mid-word. Cutting mid-word is the single largest accuracy loss when chunking for ASR.</>],
             ['Upload straight to blob storage', <>The browser gets a short-lived token from <M>/api/blob/upload</M> and uploads directly. Nothing large passes through a function, so the 4.5 MB serverless body limit never applies. Progress comes from real upload events, not a fake timer.</>],
             ['Register the note', <><M>POST /api/notes</M> writes one <M>notes</M> row and one <M>segments</M> row per chunk, all in <M>QUEUED</M>. Blob URLs are validated against our own store before they are accepted.</>],
             ['Work the queue', <>The browser calls <M>POST /api/notes/:id/step</M> in a loop. Each call performs one small unit of work, commits it, and returns how long to wait before the next call.</>],
@@ -257,9 +257,9 @@ export default async function ArchitecturePage() {
           pre-signed URLs with a short TTL instead, which the Batch API also supports.
         </p>
         <p>
-          Chunks are 16 kHz mono WAV, roughly 1.4 MB per 45 seconds. That is a deliberate number: it
-          keeps every file well inside the Batch API&apos;s 10 MB per-file ceiling regardless of how
-          the source was encoded, so a 320 kbps stereo MP3 and a phone voice memo behave identically.
+          Chunks are 16 kHz mono WAV, roughly 800 KB per 25 seconds. That keeps every file far inside
+          the Batch API&apos;s 10 MB per-file ceiling regardless of how the source was encoded, so a
+          320 kbps stereo MP3 and a phone voice memo behave identically.
         </p>
       </Section>
 
@@ -271,7 +271,7 @@ export default async function ArchitecturePage() {
         <Table
           head={['Interface', 'Limit', 'Used here for']}
           rows={[
-            [<M>POST /stt/v3</M>, '60 s max, 30 s ideal', 'Short clips, and the fallback path for long audio'],
+            [<M>POST /stt/v3</M>, '30 s in practice (60 s documented)', 'Short clips, and the workhorse path for long audio'],
             ['Batch Jobs API', '100 files/job, 10 MB/file', 'Everything over ~55 s'],
             ['Realtime WebSocket', 'live microphone', 'Not used — this is a file-upload product'],
           ]}
@@ -283,9 +283,9 @@ export default async function ArchitecturePage() {
         <Table
           head={['Strategy', 'When', 'How it runs']}
           rows={[
-            [<M>rest_single</M>, 'One chunk, under 55 s', 'A single synchronous REST call. Fastest path — usually done in a few seconds.'],
-            [<M>batch_segments</M>, 'Long audio, batch-supported language', 'All chunks submitted as one batch job by public URL. Poll every 10 s, then download each transcript and stitch.'],
-            [<M>rest_segments</M>, <>Gujarati and Punjabi, or as a fallback</>, 'Chunks transcribed over REST, three at a time, committing after each one.'],
+            [<M>rest_single</M>, 'One chunk, under 25 s', 'A single synchronous REST call. Fastest path — usually done in a few seconds.'],
+            [<M>batch_segments</M>, 'Over 8 chunks (~3.5 min), batch-supported language', 'All chunks submitted as one batch job by public URL. Poll every 10 s, then download each transcript and stitch.'],
+            [<M>rest_segments</M>, <>Under 8 chunks, Gujarati/Punjabi, or as a fallback</>, 'Chunks transcribed over REST one at a time, committing after each. Serial requests never trip Gnani\u2019s rate limiter.'],
             [<M>batch_whole</M>, 'Browser could not decode the file', 'Hand the original to the Batch API and let Gnani decode it.'],
           ]}
         />
@@ -298,8 +298,8 @@ export default async function ArchitecturePage() {
           same chunks over REST.
         </p>
         <p>
-          The ceiling is 100 chunks ≈ 75 minutes in one job. Past that the upload is rejected up
-          front with a real explanation rather than failing deep in the pipeline.
+          The ceiling is 100 chunks ≈ 40 minutes. Past that the upload is rejected up front with a
+          real explanation rather than failing deep in the pipeline.
         </p>
       </Section>
 
@@ -394,6 +394,7 @@ segments   id, note_id, idx, start_sec, end_sec, url, status, text, lines,
         <p className="text-bone-300">Things I chose deliberately, and would revisit with more time:</p>
         <ul className="space-y-3">
           {[
+            ['Probe the real limits instead of trusting the docs', 'Two of these numbers came from a live run, not the documentation: the REST endpoint rejects clips well short of its stated 60 s ceiling, and three concurrent requests trip the rate limiter on the free tier. A startup probe that measures both and caches the result would beat hard-coded constants.'],
             ['Move the queue off the browser', 'The state machine is already durable and idempotent — it just needs a real trigger. Upstash QStash or a per-minute cron would make transcription fully server-side, and Gnani\'s callback_url webhook would remove polling entirely.'],
             ['Speaker diarization', 'The Batch API supports two-speaker diarization and the schema already carries a speaker field per line. It is off because chunked audio makes speaker ids inconsistent across chunks — doing it properly needs whole-file jobs plus voice-embedding matching at the seams.'],
             ['Ask questions of a recording', 'Transcripts with timestamps are the hard part, and they are done. Chunk-and-embed for retrieval, then answer with citations that jump to the right second.'],

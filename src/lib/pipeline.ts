@@ -25,7 +25,14 @@ import { isTerminal, languageSupportsBatch } from './types';
 
 const MAX_ATTEMPTS = 4;
 const STEP_BUDGET_MS = 20_000;
-const REST_CONCURRENCY = 3;
+/**
+ * Below this many chunks, sequential REST calls finish sooner than a batch job
+ * takes to queue, start and poll. Batch only pays for itself in bulk.
+ */
+const BATCH_THRESHOLD = 8;
+// Gnani's free tier rate-limits aggressively; one request at a time is slower
+// but never trips a 429, and progress stays visible per chunk.
+const REST_CONCURRENCY = 1;
 
 export interface StepResult {
   id: string;
@@ -137,7 +144,7 @@ async function planStrategy(note: NoteRow): Promise<StepResult> {
   } else if (segments.length === 1 && duration > 0 && duration <= GNANI_LIMITS.restMaxSeconds - 5) {
     strategy = 'rest_single';
     why = `Clip is ${Math.round(duration)}s — one synchronous REST call is fastest`;
-  } else if (batchOk) {
+  } else if (batchOk && segments.length > BATCH_THRESHOLD) {
     strategy = 'batch_segments';
     why = `${segments.length} chunks submitted as a single Gnani batch job`;
   } else {

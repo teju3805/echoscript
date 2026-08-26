@@ -16,8 +16,8 @@ Gnani's synchronous REST endpoint (`POST /stt/v3`) caps at **60 seconds**. The b
 **How it's solved**
 
 1. The browser decodes the file with the Web Audio API and resamples to 16 kHz mono — the format Gnani normalises to internally.
-2. Audio over ~45 s is split at **silence-aware boundaries**: RMS energy is computed over 100 ms frames, and each cut lands on the quietest frame within ±5 s of the target, so chunks break in pauses rather than mid-word.
-3. Chunks upload **directly to blob storage**, bypassing the 4.5 MB serverless body limit entirely. Each 45 s chunk is ~1.4 MB, well inside the Batch API's 10 MB per-file ceiling regardless of source bitrate.
+2. Audio over ~25 s is split at **silence-aware boundaries**: RMS energy is computed over 100 ms frames, and each cut lands on the quietest frame within ±4 s of the target, so chunks break in pauses rather than mid-word.
+3. Chunks upload **directly to blob storage**, bypassing the 4.5 MB serverless body limit entirely. Each 25 s chunk is ~800 KB, far inside the Batch API's 10 MB per-file ceiling regardless of source bitrate.
 4. Gnani's **Batch Jobs API** pulls those public URLs itself — the audio is never uploaded twice.
 5. Per-chunk timestamps are **shifted by each chunk's offset** so the stitched transcript maps back onto the original timeline. That's what makes the transcript click-to-seek.
 
@@ -25,9 +25,9 @@ Gnani's synchronous REST endpoint (`POST /stt/v3`) caps at **60 seconds**. The b
 
 | Strategy | When | How |
 |---|---|---|
-| `rest_single` | one chunk under 55 s | single synchronous REST call |
-| `batch_segments` | long audio, batch-supported language | one batch job, poll every 10 s, stitch |
-| `rest_segments` | Gujarati/Punjabi (REST-only at Gnani), or batch fallback | chunks over REST, 3 at a time |
+| `rest_single` | one chunk under 25 s | single synchronous REST call |
+| `batch_segments` | over 8 chunks (~3.5 min), batch-supported language | one batch job, poll every 10 s, stitch |
+| `rest_segments` | under 8 chunks, Gujarati/Punjabi, or batch fallback | chunks over REST, one at a time |
 | `batch_whole` | browser couldn't decode the file | hand the original to Gnani's decoder |
 
 ## Background processing
@@ -112,5 +112,14 @@ GNANI_BASE_URL=http://localhost:4010 \
 BLOB_PUBLIC_HOST=localhost npm start &
 node test/e2e.js
 ```
+
+### Calibrated against the live API
+
+Two constants were corrected after the first real run, and both are worth knowing:
+
+- **The REST endpoint rejects clips well short of its documented 60 s ceiling.** 45 s chunks came back as `AUDIO_TOO_LONG`, so the target chunk is 25 s and `restMaxSeconds` is 30.
+- **Three concurrent REST calls trip the free tier's rate limiter.** Requests are now serial.
+
+The first live run also exercised the resilience paths for real: a batch job returned `START_FAILED (ReadTimeout)` when Gnani could not pull the blob URLs in time, and the pipeline fell back to REST on its own — exactly as designed.
 
 Verified: all four strategies reach `READY`; auth failure is non-retryable with a clear hint; a `START_FAILED` batch job falls back to REST and still completes; a failed chunk yields `READY_PARTIAL` with the gap marked; unreachable upstream retries with backoff; cross-session note access returns 403.

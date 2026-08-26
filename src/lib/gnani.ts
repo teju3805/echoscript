@@ -6,8 +6,10 @@ const MODEL = process.env.GNANI_MODEL || 'gnani-prisma-v2.5';
 
 /** Hard limits published by Gnani — encoded here so the pipeline can plan around them. */
 export const GNANI_LIMITS = {
-  restMaxSeconds: 60,
-  restIdealSeconds: 30,
+  // Documented as 60 s, but the service rejects clips shorter than that in
+  // practice, so we treat 30 s as the real ceiling and chunk to 25 s.
+  restMaxSeconds: 30,
+  restIdealSeconds: 25,
   batchMaxFileBytes: 10 * 1024 * 1024,
   batchMaxFilesPerJob: 100,
   batchMinPollSeconds: 10,
