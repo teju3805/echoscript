@@ -148,6 +148,17 @@ export async function prepareAudio(
   const cuts = findSplitPoints(energy, 10, durationSec);
   const bounds = [0, ...cuts, durationSec];
 
+  /**
+   * Fold a very short tail into the chunk before it. A one- or two-second
+   * fragment at the end of a recording carries no usable speech, so the
+   * recogniser returns nothing for it and the note is marked as having a gap —
+   * a scary-looking result caused entirely by arithmetic, not by lost audio.
+   */
+  const MIN_TAIL_SEC = 4;
+  if (bounds.length > 2 && bounds[bounds.length - 1] - bounds[bounds.length - 2] < MIN_TAIL_SEC) {
+    bounds.splice(bounds.length - 2, 1);
+  }
+
   if (bounds.length - 1 > MAX_CHUNKS) {
     throw new AudioPrepError(
       'TOO_LONG',
@@ -163,7 +174,9 @@ export async function prepareAudio(
     const end = bounds[i + 1];
     const from = Math.floor(start * TARGET_SAMPLE_RATE);
     const to = Math.min(samples.length, Math.floor(end * TARGET_SAMPLE_RATE));
-    if (to - from < TARGET_SAMPLE_RATE * 0.2) continue; // skip slivers under 200 ms
+    // Anything under two seconds is silence or a clipped word; sending it to
+    // the recogniser only produces an empty transcript and a false gap.
+    if (to - from < TARGET_SAMPLE_RATE * 2) continue;
     chunks.push({ idx: chunks.length, start, end, blob: encodeWav(samples.subarray(from, to), TARGET_SAMPLE_RATE) });
     onProgress?.(0.35 + (0.6 * (i + 1)) / (bounds.length - 1), `Encoding chunk ${i + 1}`);
   }
