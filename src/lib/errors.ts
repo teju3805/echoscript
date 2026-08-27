@@ -67,8 +67,8 @@ export function fromGnaniStatus(status: number, body: string): PipelineError {
     });
   }
   if (status === 429) {
-    return new PipelineError('ASR_RATE_LIMIT', 'Gnani rate limit hit.', {
-      hint: 'The pipeline backs off and retries automatically. No action needed.',
+    return new PipelineError('ASR_RATE_LIMIT', 'Gnani is rate-limiting this account.', {
+      hint: 'The pipeline waits and retries for several minutes. If it keeps failing, check the remaining credits on your Gnani dashboard — an exhausted quota returns the same response as a rate limit.',
       retryable: true,
     });
   }

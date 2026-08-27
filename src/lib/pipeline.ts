@@ -24,6 +24,8 @@ import type { NoteRow, SegmentRow, TranscriptLine } from './types';
 import { isTerminal, languageSupportsBatch } from './types';
 
 const MAX_ATTEMPTS = 4;
+/** Rate limits recover on a slower clock, so they are allowed more patience. */
+const RATE_LIMIT_ATTEMPTS = 6;
 const STEP_BUDGET_MS = 20_000;
 /**
  * Below this many chunks, sequential REST calls finish sooner than a batch job
@@ -43,8 +45,22 @@ export interface StepResult {
   nextDelayMs: number;
 }
 
-function backoffMs(attempt: number): number {
+/**
+ * Transient upstream errors clear in seconds, so a short ladder is right for
+ * them. A rate limit is different in kind: the quota window is measured in
+ * minutes, so hammering it four times in half a minute guarantees four
+ * refusals and then a spurious "failed" note. Rate limits get their own
+ * schedule and a larger attempt budget.
+ */
+function backoffMs(attempt: number, code?: string): number {
+  if (code === 'ASR_RATE_LIMIT') {
+    return [20_000, 60_000, 120_000, 180_000, 300_000][Math.min(attempt, 4)];
+  }
   return [2_000, 6_000, 15_000, 40_000][Math.min(attempt, 3)];
+}
+
+function maxAttemptsFor(code?: string): number {
+  return code === 'ASR_RATE_LIMIT' ? RATE_LIMIT_ATTEMPTS : MAX_ATTEMPTS;
 }
 
 function countWords(text: string): number {
@@ -544,16 +560,17 @@ async function runSummary(note: NoteRow): Promise<StepResult> {
 
 async function handleFailure(note: NoteRow, err: PipelineError): Promise<StepResult> {
   const attempts = note.attempts + 1;
-  const canRetry = err.retryable && attempts < MAX_ATTEMPTS;
+  const limit = maxAttemptsFor(err.code);
+  const canRetry = err.retryable && attempts < limit;
 
   if (canRetry) {
-    const wait = backoffMs(attempts - 1);
+    const wait = backoffMs(attempts - 1, err.code);
     await updateNote(note.id, {
       attempts,
-      stageDetail: `${err.message} — retrying in ${Math.round(wait / 1000)}s (attempt ${attempts}/${MAX_ATTEMPTS})`,
+      stageDetail: `${err.message} — retrying in ${Math.round(wait / 1000)}s (attempt ${attempts}/${limit})`,
       nextRunAt: new Date(Date.now() + wait),
     });
-    await appendEvent(note.id, event('warn', `${err.code}: ${err.message} — retry ${attempts}/${MAX_ATTEMPTS}`));
+    await appendEvent(note.id, event('warn', `${err.code}: ${err.message} — retry ${attempts}/${limit}`));
     return {
       id: note.id,
       status: note.status,
