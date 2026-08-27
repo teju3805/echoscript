@@ -38,7 +38,7 @@ export function modelFor(p: ProviderId): string {
     case 'gemini':
       return process.env.GEMINI_MODEL || 'gemini-3.7-flash';
     case 'groq':
-      return process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+      return process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
     case 'openai':
       return process.env.OPENAI_MODEL || 'gpt-4o-mini';
     case 'anthropic':
@@ -143,6 +143,43 @@ async function discoverGeminiModel(key: string): Promise<string | null> {
   }
 }
 
+/** Discovered model ids, cached per provider for the life of the container. */
+const resolvedModels: Partial<Record<ProviderId, string>> = {};
+
+/**
+ * Ask an OpenAI-compatible provider what it currently serves and pick a usable
+ * chat model. Groq in particular retires its whole chat line-up on a schedule
+ * (llama-3.3-70b-versatile was decommissioned in August 2026), which silently
+ * breaks a deployment that hard-codes a model id.
+ */
+async function discoverChatModel(base: string, key: string): Promise<string | null> {
+  try {
+    const res = await post(
+      `${base}/models`,
+      { method: 'GET', headers: { Authorization: `Bearer ${key}` } },
+      15_000,
+    );
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as { data?: { id?: string }[] };
+    const ids = (data.data || []).map((m) => m.id || '').filter(Boolean);
+
+    // Drop everything that is not a general-purpose chat model.
+    const excluded = /whisper|tts|orpheus|guard|embed|moderation|rerank|vision|audio|image|dall|sora/i;
+    const chat = ids.filter((id) => !excluded.test(id));
+    if (!chat.length) return null;
+
+    // Prefer the larger general models, then anything else that is left.
+    const preferred = chat.find((id) => /gpt-oss-120b/i.test(id))
+      || chat.find((id) => /120b|70b/i.test(id))
+      || chat.find((id) => /gpt-oss/i.test(id))
+      || chat.find((id) => /instruct|chat|versatile/i.test(id));
+    return preferred || chat[0];
+  } catch {
+    return null;
+  }
+}
+
 async function callProvider(p: ProviderId, prompt: string): Promise<string> {
   const key = keyFor(p)!;
   const model = modelFor(p);
@@ -204,19 +241,35 @@ async function callProvider(p: ProviderId, prompt: string): Promise<string> {
 
   // Groq and OpenAI share the same chat-completions shape.
   const base = p === 'groq' ? 'https://api.groq.com/openai/v1' : 'https://api.openai.com/v1';
-  const res = await post(`${base}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model,
-      temperature: 0.2,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: SYSTEM },
-        { role: 'user', content: prompt },
-      ],
-    }),
-  });
+  const callChat = (m: string) =>
+    post(`${base}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: m,
+        temperature: 0.2,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: SYSTEM },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
+
+  let chosen = resolvedModels[p] || model;
+  let res = await callChat(chosen);
+
+  // A decommissioned model id comes back as 404 (Groq) or 400 (OpenAI). Ask the
+  // provider what it actually serves rather than failing the summary.
+  if (res.status === 404 || res.status === 400) {
+    const discovered = await discoverChatModel(base, key);
+    if (discovered && discovered !== chosen) {
+      chosen = discovered;
+      resolvedModels[p] = discovered;
+      res = await callChat(chosen);
+    }
+  }
+
   if (!res.ok) throw new Error(`${p} ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   return data.choices?.[0]?.message?.content || '';
