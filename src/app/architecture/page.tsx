@@ -411,7 +411,53 @@ segments   id, note_id, idx, start_sec, end_sec, url, status, text, lines,
         </ul>
       </Section>
 
-      <Section n="09" title="Running it yourself">
+      <Section n="09" title="What the live API changed">
+        <p>
+          Four of the constants in this system are not the ones the documentation
+          suggested. Each was corrected after a real run failed, and each is worth naming
+          because the failure mode was invisible until it happened in production.
+        </p>
+        <Table
+          head={['What broke', 'Why', 'Fix']}
+          rows={[
+            [
+              <>REST rejected 45 s chunks as <M>AUDIO_TOO_LONG</M></>,
+              <>The endpoint is documented at 60 s but refuses clips well short of that.</>,
+              'Chunks target 25 s and the internal ceiling is 30 s.',
+            ],
+            [
+              'Every chunk returned 429',
+              'Three concurrent REST calls trip the free tier’s rate limiter.',
+              'Requests are serial. Slower, but it never fails.',
+            ],
+            [
+              <>Both LLM providers returned 404 mid-deployment</>,
+              <>Google retired <M>gemini-2.5-flash</M> and Groq decommissioned <M>llama-3.3-70b-versatile</M> weeks apart. A hard-coded model id silently becomes invalid.</>,
+              'On a 404 each adapter asks the provider’s models endpoint what it currently serves, retries with a live id, and caches it.',
+            ],
+            [
+              <>Summarising returned 504 and cost ~2 minutes per attempt</>,
+              <>A 60 s upstream timeout, retried twice, inside a 60 s function. The step was always killed before it could commit — and its 55 s claim lease outlived it, so the note stayed locked by a dead worker.</>,
+              'Upstream calls cap at 20 s, one attempt per provider per step, and the lease is 40 s — shorter than the ceiling it runs inside.',
+            ],
+          ]}
+        />
+        <p>
+          The last one is the one I would flag in review. Nothing was wrong with any single
+          number; they were wrong <span className="text-bone-200">relative to each other</span>.
+          A timeout only means something in relation to the budget that contains it, and a lock
+          must always expire sooner than the process holding it can be killed.
+        </p>
+        <p>
+          The retry ladder needed the same treatment. Backoff tuned for a transient network
+          blip — 2 s, 6 s, 15 s, 40 s — spends its whole budget inside 35 seconds, which is far
+          too impatient for a quota window measured in minutes. Rate limits now get their own
+          schedule (20 s to 5 min, six attempts) rather than being retried like a dropped packet
+          and then declared a failure.
+        </p>
+      </Section>
+
+      <Section n="10" title="Running it yourself">
         <Table
           head={['Variable', 'Required', 'Notes']}
           rows={[
