@@ -58,6 +58,7 @@ Every failure normalises to a code with a user-facing message, a hint, and a **r
 | Gnani 429 / timeout / 5xx | backoff 2 s → 6 s → 15 s → 40 s, max 4 attempts |
 | One chunk fails | note completes `READY_PARTIAL`, gap marked inline at its real timestamp |
 | Batch job `START_FAILED` | strategy rewritten to `rest_segments`, same chunks retried |
+| Summariser quota exhausted | fails over to the next configured LLM provider, then backs off and retries before degrading |
 | Summariser fails | labelled extractive fallback; the transcript is never lost |
 | Silent / music-only audio | `ASR_EMPTY`, non-retryable, likely cause named |
 
@@ -119,6 +120,8 @@ Two constants were corrected after the first real run, and both are worth knowin
 
 - **The REST endpoint rejects clips well short of its documented 60 s ceiling.** 45 s chunks came back as `AUDIO_TOO_LONG`, so the target chunk is 25 s and `restMaxSeconds` is 30.
 - **Three concurrent REST calls trip the free tier's rate limiter.** Requests are now serial.
+- **Upstream timeouts must fit inside the function ceiling.** A 60 s LLM timeout inside a 60 s function meant the platform killed the step before it could commit, returning a 504 and holding the note's lease until it expired — roughly two minutes lost per attempt. Upstream calls now cap at 20 s, the summariser makes one attempt per provider per step, and the claim lease is 40 s so a killed step frees the note quickly.
+- **Free-tier LLM quotas run out mid-demo.** A 429 no longer degrades the summary immediately: the adapter tries every configured provider, then lets the pipeline back off and retry, and only falls back to extractive after that.
 - **Google retires Gemini model ids on a schedule.** `gemini-2.5-flash` started returning 404 mid-deployment, so the adapter now asks the API which models it currently serves and picks the newest Flash it offers, caching the answer. Gemini 3.x also dropped the sampling parameters, so `temperature` is no longer sent.
 
 The first live run also exercised the resilience paths for real: a batch job returned `START_FAILED (ReadTimeout)` when Gnani could not pull the blob URLs in time, and the pipeline fell back to REST on its own — exactly as designed.

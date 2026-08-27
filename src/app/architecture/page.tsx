@@ -361,6 +361,7 @@ RETURNING *`}
             ['Upstream timeout', 'Same backoff, visible in the log', 'Aborted at the client with AbortController, never hangs'],
             ['One chunk fails', <>Note completes as <M>READY_PARTIAL</M></>, 'The gap is marked inline at its real timestamp — a 40-minute recording is not lost to one bad chunk'],
             ['Batch job cannot start', '"Falling back to REST" in the log', 'Strategy rewritten, same chunks retried on the other endpoint'],
+            ['Summariser quota exhausted', '"Retrying automatically — quotas reset within the minute"', 'Fails over to the next configured LLM provider, then backs off before degrading'],
             ['Summariser fails', 'Summary labelled as extractive fallback', 'Transcript is the primary artefact and is never lost'],
             ['Silent / music-only audio', '"The recogniser found no speech"', 'Non-retryable, with the likely cause named'],
           ]}

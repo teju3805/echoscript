@@ -9,7 +9,7 @@ import {
   transcribeRest,
   GNANI_LIMITS,
 } from './gnani';
-import { activeProvider, modelFor, summarise } from './llm';
+import { SummariserBusy, activeProvider, modelFor, summarise } from './llm';
 import {
   appendEvent,
   claimNote,
@@ -470,6 +470,9 @@ async function finishTranscript(
     lines: lines.length ? lines : null,
     wordCount: countWords(text),
     segmentsFailed: failedChunks,
+    // A batch job that finishes inside a single poll never updates the running
+    // counter, which left the stage rail showing 0/15 on a completed note.
+    segmentsDone: Math.max(0, (note.segments_total || 0) - failedChunks),
     status: 'SUMMARIZING',
     stageDetail: `Transcript ready (${countWords(text)} words) — summarising`,
     nextRunAt: new Date(),
@@ -494,11 +497,28 @@ async function finishTranscript(
 
 async function runSummary(note: NoteRow): Promise<StepResult> {
   const transcript = note.transcript || '';
-  const summary = await summarise(transcript, {
-    filename: note.original_filename,
-    durationSec: note.duration_sec,
-    language: note.language_code,
-  });
+
+  let summary;
+  try {
+    summary = await summarise(
+      transcript,
+      {
+        filename: note.original_filename,
+        durationSec: note.duration_sec,
+        language: note.language_code,
+      },
+      // Only accept a degraded summary once we've already waited a couple of rounds.
+      note.attempts >= 2,
+    );
+  } catch (err) {
+    if (err instanceof SummariserBusy) {
+      throw new PipelineError('LLM_FAILED', `Summariser quota exhausted: ${err.message}`, {
+        hint: 'Retrying automatically — quotas usually reset within the minute.',
+        retryable: true,
+      });
+    }
+    throw err;
+  }
 
   const status = note.segments_failed > 0 ? 'READY_PARTIAL' : 'READY';
 

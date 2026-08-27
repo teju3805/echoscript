@@ -268,7 +268,11 @@ export async function updateNote(id: string, patch: NotePatch): Promise<void> {
  * the same note is normal here (the browser drives one loop and the cron drives
  * another) — only one wins the UPDATE, the other backs off.
  */
-export async function claimNote(id: string, leaseSeconds = 55): Promise<NoteRow | null> {
+/**
+ * Lease is deliberately shorter than the 60 s function ceiling: if a step is
+ * killed mid-flight the note frees itself quickly instead of sitting locked.
+ */
+export async function claimNote(id: string, leaseSeconds = 40): Promise<NoteRow | null> {
   const rows = await query<NoteRow>(
     `UPDATE notes
         SET locked_until = NOW() + ($2 || ' seconds')::interval,

@@ -71,7 +71,12 @@ function buildPrompt(transcript: string, meta: { filename: string; durationSec: 
   return `File: ${meta.filename}\nDuration: ${minutes}\nSpoken language: ${meta.language}\n\nTRANSCRIPT:\n"""\n${clipped}\n"""`;
 }
 
-async function post(url: string, init: RequestInit, timeoutMs = 60_000): Promise<Response> {
+/**
+ * Every upstream call must finish well inside the 60 s serverless ceiling,
+ * otherwise the platform kills the function mid-step and the work is lost.
+ * 20 s leaves room for a second provider in the same invocation.
+ */
+async function post(url: string, init: RequestInit, timeoutMs = 20_000): Promise<Response> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -263,9 +268,30 @@ function extractiveSummary(transcript: string, filename: string): Summary {
 
 /* ------------------------------------------------------------------ */
 
+export class SummariserBusy extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SummariserBusy';
+  }
+}
+
+function isRateLimited(message: string): boolean {
+  return /\b429\b|quota|rate limit|resource_exhausted/i.test(message);
+}
+
+/** Every provider that has credentials, pinned choice first. */
+function configuredProviders(): ProviderId[] {
+  const pinned = (process.env.LLM_PROVIDER || '').toLowerCase() as ProviderId;
+  const list = ORDER.filter((p) => keyFor(p));
+  if (pinned && keyFor(pinned)) return [pinned, ...list.filter((p) => p !== pinned)];
+  return list;
+}
+
 export async function summarise(
   transcript: string,
   meta: { filename: string; durationSec: number | null; language: string },
+  /** When false, a rate limit throws instead of degrading, so the pipeline can retry later. */
+  allowDegrade = true,
 ): Promise<Summary> {
   const clean = transcript.trim();
   if (clean.split(/\s+/).filter(Boolean).length < 12) {
@@ -280,37 +306,54 @@ export async function summarise(
     };
   }
 
-  const provider = activeProvider();
-  if (provider === 'extractive') return extractiveSummary(clean, meta.filename);
+  const providers = configuredProviders();
+  if (!providers.length) return extractiveSummary(clean, meta.filename);
 
   const prompt = buildPrompt(clean, meta);
   let lastError = '';
 
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const raw = await callProvider(provider, prompt);
-      const obj = extractJson(raw);
-      const title = typeof obj.title === 'string' ? obj.title.trim() : '';
-      const tldr = typeof obj.tldr === 'string' ? obj.tldr.trim() : '';
-      if (!tldr) throw new Error('model returned an empty summary');
+  // Walk every configured provider before giving up. A quota exhausted on one
+  // vendor should not cost the user their summary if another key is present.
+  const budgetStart = Date.now();
 
-      return {
-        title: (title || meta.filename.replace(/\.[^.]+$/, '')).slice(0, 90),
-        tldr,
-        keyPoints: toStringArray(obj.keyPoints, 8),
-        actionItems: toStringArray(obj.actionItems, 8),
-        topics: toStringArray(obj.topics, 6).map((t) => t.toLowerCase()),
-        tone: typeof obj.tone === 'string' ? obj.tone.slice(0, 40) : undefined,
-        generatedBy: `${provider}/${modelFor(provider)}`,
-      };
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
+  for (const provider of providers) {
+    // Stop walking providers before the function ceiling rather than being
+    // killed halfway through one.
+    if (Date.now() - budgetStart > 35_000) break;
+    {
+      try {
+        const raw = await callProvider(provider, prompt);
+        const obj = extractJson(raw);
+        const title = typeof obj.title === 'string' ? obj.title.trim() : '';
+        const tldr = typeof obj.tldr === 'string' ? obj.tldr.trim() : '';
+        if (!tldr) throw new Error('model returned an empty summary');
+
+        return {
+          title: (title || meta.filename.replace(/\.[^.]+$/, '')).slice(0, 90),
+          tldr,
+          keyPoints: toStringArray(obj.keyPoints, 8),
+          actionItems: toStringArray(obj.actionItems, 8),
+          topics: toStringArray(obj.topics, 6).map((t) => t.toLowerCase()),
+          tone: typeof obj.tone === 'string' ? obj.tone.slice(0, 40) : undefined,
+          generatedBy: `${provider}/${modelFor(provider)}`,
+        };
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        // A quota error will not clear on an immediate second attempt.
+        if (isRateLimited(lastError)) break;
+      }
     }
+  }
+
+  // Quotas reset. Let the pipeline back off and come back rather than
+  // permanently downgrading a summary the user could have had.
+  if (isRateLimited(lastError) && !allowDegrade) {
+    throw new SummariserBusy(lastError.slice(0, 160));
   }
 
   // The transcript is the primary artefact — never fail the whole note because
   // the summariser had a bad day. Degrade to extractive and say so.
   const fallback = extractiveSummary(clean, meta.filename);
-  fallback.generatedBy = `extractive fallback (${provider} failed: ${lastError.slice(0, 120)})`;
+  fallback.generatedBy = `extractive fallback (${providers.join('/')} failed: ${lastError.slice(0, 120)})`;
   return fallback;
 }
